@@ -1,38 +1,49 @@
 # Mini Device Fleet Monitor
 
-A lightweight, robust web application for real-time IoT device fleet monitoring. Devices send periodic heartbeats, and their status (**ONLINE** / **OFFLINE**) is calculated dynamically using a **30-second timeout rule**.
+A lightweight web application for monitoring a fleet of simulated devices. Devices send periodic heartbeats, and their status (**ONLINE** / **OFFLINE**) is calculated dynamically using a **30-second timeout rule**.
 
-Includes a FastAPI backend, live operator dashboard, standalone multi-device simulator, and comprehensive automated test suite.
+Includes a FastAPI backend, operator dashboard, standalone multi-device simulator, and automated test suite.
 
 ---
 
 ## Features
 
-- **Dynamic Status Evaluation**: Evaluated in real time: `ONLINE` if the last heartbeat was received within 30s, otherwise `OFFLINE`. Status is computed dynamically on query rather than stored as stale state.
-- **Server Reception Authority**: Device status uses the server's reception time, preventing client clock skew or historical replays from causing false offline states. Client timestamps are retained for diagnostics.
-- **Clean Fleet Initialization**: The database starts empty; devices register dynamically via `POST /devices`.
-- **Concurrency & Race Safety**: SQLite in WAL mode with connection management and primary key integrity handling against simultaneous registration races.
-- **Live Operator Dashboard**: Browser UI (`/`) with auto-refreshing telemetry, device status badges, summary metrics, and status filters.
-- **Interactive Documentation**: Auto-generated OpenAPI / Swagger UI at `/docs`.
+* **Dynamic Status Evaluation**: A device is `ONLINE` if its latest heartbeat was received within 30 seconds; otherwise it is `OFFLINE`. Status is calculated dynamically rather than stored as potentially stale state.
+* **Server Reception Authority**: The server's heartbeat reception time is authoritative for liveness, avoiding client clock skew or historical timestamps affecting the 30-second timeout. Client timestamps are retained for diagnostics.
+* **Clean Fleet Initialization**: The database starts empty; devices register dynamically through `POST /devices`.
+* **Concurrency & Race Safety**: SQLite uses WAL mode and connection management, while database constraints prevent duplicate device registrations during concurrent requests.
+* **Operator Dashboard**: Browser UI at `/` provides automatically refreshed fleet status, summary metrics, device information, and status filtering.
+* **Interactive API Documentation**: FastAPI provides OpenAPI/Swagger documentation at `/docs`.
 
 ---
 
 ## Architecture & Project Structure
 
-```
+```text
 mini-device-fleet-monitor/
 ├── app/
-│   ├── config.py         # Configuration constants & environment variable overrides
+│   ├── config.py         # Configuration constants & environment overrides
 │   ├── database.py       # SQLite connection manager & WAL configuration
-│   ├── main.py           # FastAPI routes, Pydantic validation, static dashboard
-│   └── services.py       # Fleet business logic, dynamic status calculation
+│   ├── main.py           # FastAPI routes, validation, static dashboard
+│   └── services.py       # Fleet business logic & dynamic status calculation
 ├── static/               # Operator dashboard (HTML, CSS, JS)
 ├── tests/
 │   └── test_api.py       # 21 automated API, concurrency, and lifecycle tests
-├── simulator.py          # Standalone multi-device simulator CLI
-├── run.py                # Server entry point (Uvicorn)
-└── requirements.txt      # Pinned dependencies
+├── simulator.py          # Standalone multi-device simulator
+├── run.py                # Uvicorn server entry point
+└── requirements.txt      # Python dependencies
 ```
+
+---
+
+## Server
+
+When running locally, the application is available at:
+
+* **Operator Dashboard:** http://127.0.0.1:8000/
+* **API Documentation:** http://127.0.0.1:8000/docs
+
+> `127.0.0.1:8000` is a local development server address. It is accessible only from the machine running the application.
 
 ---
 
@@ -41,12 +52,13 @@ mini-device-fleet-monitor/
 ### 1. Setup
 
 ```bash
-# Create and activate virtual environment
+# Create a virtual environment
 python -m venv .venv
 
-# Windows (PowerShell / cmd):
+# Windows (PowerShell / cmd)
 .venv\Scripts\activate
-# Linux / macOS:
+
+# Linux / macOS
 source .venv/bin/activate
 
 # Install dependencies
@@ -58,42 +70,82 @@ pip install -r requirements.txt
 ```bash
 python run.py
 ```
-- **Operator Dashboard**: [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
-- **Interactive Swagger Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
+The server will start on:
+
+```text
+http://127.0.0.1:8000
+```
+
+Open the following in a browser:
+
+```text
+http://127.0.0.1:8000/
+```
+
+Swagger API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
 
 ### 3. Run the Device Simulator
 
-In a second terminal with the virtual environment activated:
+Open a second terminal with the virtual environment activated:
 
 ```bash
 python simulator.py
 ```
 
-**Demonstration timeline (45s total)**:
-1. Simulator registers 5 devices (`device-01` to `device-05`) and sends heartbeats every 5 seconds (all **ONLINE**).
-2. At $t = 15\text{s}$, `device-03` ceases heartbeats while others continue.
-3. At $t = 45\text{s}$ (30s timeout elapsed), `device-03` automatically transitions to **OFFLINE** on the dashboard and summary counters.
+The simulator registers five devices and sends heartbeats every 5 seconds.
 
-*Helpful CLI options:*
-- `--interval <sec>`: Heartbeat frequency (default: `5.0`).
-- `--stop <device_id>`: Target device to stop (default: `device-03`).
-- `--stop-after <sec>`: Time before stopping target device (default: `15.0`).
-- `--device <device_id>`: Run only a single device process (useful for manual Ctrl+C testing).
+### Demonstration Timeline
+
+The default simulator demonstrates the timeout behavior automatically:
+
+1. Five devices (`device-01` to `device-05`) register and begin sending heartbeats.
+2. All five devices initially appear as **ONLINE**.
+3. After 15 seconds, `device-03` stops sending heartbeats.
+4. The other four devices continue sending heartbeats.
+5. After more than 30 seconds without a heartbeat from `device-03`, it becomes **OFFLINE**.
+6. The dashboard and `/summary` endpoint reflect the updated fleet state.
+
+### Simulator Options
+
+```bash
+python simulator.py --interval 5
+python simulator.py --stop device-03
+python simulator.py --stop-after 15
+python simulator.py --device device-01
+```
+
+* `--interval <sec>`: Heartbeat frequency. Default: `5.0`
+* `--stop <device_id>`: Device to stop. Default: `device-03`
+* `--stop-after <sec>`: Time before stopping the target device. Default: `15.0`
+* `--device <device_id>`: Run a single simulated device for manual testing.
 
 ---
 
 ## API Summary
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/devices` | Register a new device (`{"id": "dev-01", "name": "Lab Device"}`) |
-| `GET` | `/devices` | List all devices (supports optional `?status=ONLINE` or `?status=OFFLINE`) |
-| `GET` | `/devices/{id}` | Retrieve details and status for a single device |
-| `POST` | `/devices/{id}/heartbeat` | Ingest device heartbeat with status and optional metrics (`cpu_usage`, `signal_strength`) |
-| `GET` | `/summary` | Return aggregate counts: `{"total": N, "online": N, "offline": N}` |
-| `GET` | `/` | Serve operator dashboard |
+| Method | Endpoint                  | Description                         |
+| ------ | ------------------------- | ----------------------------------- |
+| `POST` | `/devices`                | Register a new device               |
+| `GET`  | `/devices`                | List all devices and current status |
+| `GET`  | `/devices/{id}`           | Retrieve a single device            |
+| `POST` | `/devices/{id}/heartbeat` | Receive a device heartbeat          |
+| `GET`  | `/summary`                | Return fleet status counts          |
+| `GET`  | `/`                       | Serve the operator dashboard        |
 
-### Example Heartbeat Request
+### Register a Device
+
+```bash
+curl -X POST http://127.0.0.1:8000/devices \
+  -H "Content-Type: application/json" \
+  -d '{"id": "device-01", "name": "Lab Device 01"}'
+```
+
+### Send a Heartbeat
 
 ```bash
 curl -X POST http://127.0.0.1:8000/devices/device-01/heartbeat \
@@ -101,40 +153,170 @@ curl -X POST http://127.0.0.1:8000/devices/device-01/heartbeat \
   -d '{"timestamp": "2026-09-21T10:30:00Z", "status": "OK", "cpu_usage": 35.2, "signal_strength": -68.0}'
 ```
 
+The device-provided timestamp is retained for diagnostic purposes, but the **server reception time** is used for the 30-second liveness calculation.
+
+### List Devices
+
+```bash
+curl http://127.0.0.1:8000/devices
+```
+
+### Get Device Details
+
+```bash
+curl http://127.0.0.1:8000/devices/device-01
+```
+
+### Fleet Summary
+
+```bash
+curl http://127.0.0.1:8000/summary
+```
+
+Example:
+
+```json
+{
+  "total": 5,
+  "online": 4,
+  "offline": 1
+}
+```
+
+---
+
+## Heartbeat & Timeout Model
+
+The application stores the latest server-side heartbeat reception time for each device.
+
+```text
+current_time - last_heartbeat <= 30 seconds
+                ↓
+             ONLINE
+
+current_time - last_heartbeat > 30 seconds
+                ↓
+             OFFLINE
+```
+
+The boundary is therefore:
+
+```text
+29.0 seconds → ONLINE
+30.0 seconds → ONLINE
+30.1 seconds → OFFLINE
+```
+
+No background timeout worker is required. Status is calculated when the API or dashboard requests device information.
+
+---
+
+## Assumptions
+
+* A device must be registered before it can send a heartbeat.
+* Unknown devices sending heartbeats are rejected.
+* The server's heartbeat reception time is authoritative for device liveness.
+* The device-provided timestamp is informational and retained for diagnostics.
+* A registered device that has never sent a heartbeat is considered `OFFLINE`.
+* Only the latest heartbeat is required by the assignment; heartbeat history is not stored.
+* SQLite is sufficient for the scale and scope of this engineering exercise.
+* Authentication and authorization are outside the scope of the assignment.
+
 ---
 
 ## Running Tests
 
-Run the test suite using pytest:
+Run the automated test suite with:
 
 ```bash
 pytest -v
 ```
 
-The test suite in `tests/test_api.py` contains **21 automated tests** covering:
-- **Clean start & registration**: Verifies fleet starts empty, validates payload constraints (HTTP 422), and prevents duplicate IDs (HTTP 409).
-- **Heartbeat ingestion**: Unknown device rejection (HTTP 404), optional metrics storage (`cpu_usage`, `signal_strength`), and ISO-8601 timezone parsing.
-- **30-second timeout precision**: Exact boundary testing ($\le 30.0\text{s}$ ONLINE, $> 30.0\text{s}$ OFFLINE) tested deterministically without artificial `sleep()` delays.
-- **Lifecycle transitions & aging**: Offline devices recover to ONLINE on new heartbeat; `/summary` dynamically decrements online counts when heartbeats age past 30s.
-- **Concurrency & race safety**: Multi-threaded heartbeat ingestion and concurrent duplicate registrations returning clean 201/409 responses with zero 500 errors.
+The suite contains **21 automated tests** covering:
+
+* Clean database start and device registration
+* Required-field validation
+* Duplicate device registration
+* Unknown-device heartbeat rejection
+* Heartbeat ingestion
+* Optional heartbeat metrics
+* ISO-8601 timestamp handling
+* 30-second timeout boundary behavior
+* Offline → ONLINE recovery
+* Dynamic fleet summary calculation
+* Concurrent heartbeat handling
+* Concurrent duplicate registration handling
+
+The timeout tests are deterministic and do not use artificial 30-second `sleep()` delays.
 
 ---
 
 ## Configuration
 
-Settings can be customized via environment variables:
+The following environment variables can be used to customize the application:
 
-| Variable | Default | Description |
-|---|---|---|
-| `HEARTBEAT_TIMEOUT_SECONDS` | `30` | Timeout threshold in seconds for ONLINE status |
-| `DATABASE_PATH` | `fleet_monitor.db` | SQLite database file location |
-| `HOST` | `127.0.0.1` | Network interface to bind |
-| `PORT` | `8000` | Port to listen on |
+| Variable                    | Default            | Description                         |
+| --------------------------- | ------------------ | ----------------------------------- |
+| `HEARTBEAT_TIMEOUT_SECONDS` | `30`               | Timeout threshold for ONLINE status |
+| `DATABASE_PATH`             | `fleet_monitor.db` | SQLite database path                |
+| `HOST`                      | `127.0.0.1`        | Server network interface            |
+| `PORT`                      | `8000`             | Server port                         |
+
+Example:
+
+```bash
+HEARTBEAT_TIMEOUT_SECONDS=30
+PORT=8000
+```
 
 ---
 
-## AI Usage Disclosure
+## Known Limitations
 
-- **Scaffolding & Review**: Used Google Gemini and Claude within Antigravity for initial boilerplate drafting and specification alignment review.
-- **Key Iterations**: Identified and corrected the 30s timeout rule, enforced server reception timestamp authority over client clocks, and normalized Python 3.10 ISO-8601 timestamp handling.
-- **Verification**: All implementation logic, concurrency handling, test suite validation (21 tests), and end-to-end server/simulator behavior were directly verified and refined.
+* SQLite is intended for the small scale of this exercise rather than a distributed production deployment.
+* Only the latest heartbeat is retained; historical heartbeat data is not stored.
+* Authentication and authorization are not implemented because they are outside the task requirements.
+* The simulator is intended for functional demonstration and testing rather than high-volume load testing.
+* The application is designed as a single FastAPI service and does not use distributed infrastructure.
+
+---
+
+## What I Would Improve With One Additional Day
+
+With additional development time, I would consider:
+
+* Persistent heartbeat history and historical device metrics
+* More structured application logging and observability
+* CI-based automated testing
+* Containerized deployment
+* More extensive concurrency and load testing
+* Authentication and authorization if the application were exposed beyond a trusted environment
+
+These improvements were intentionally kept outside the core implementation because correctness and clarity are more important for the scope of this exercise.
+
+---
+
+## AI Usage
+
+* **Tools Used:** Google Gemini and Claude.
+* **Purpose:** Used for initial scaffolding, implementation assistance, test design, specification alignment, and code review.
+* **Key Improvement:** AI-assisted review identified the importance of using the server heartbeat reception time rather than trusting device timestamps for the 30-second liveness calculation. The implementation was adjusted accordingly.
+* **Verification:** Personally verified the API lifecycle, registration and heartbeat behavior, 30-second boundary conditions, concurrent requests, automated test suite, and end-to-end simulator behavior against the assignment requirements.
+
+AI-generated suggestions were reviewed and modified where necessary rather than being accepted without validation.
+
+---
+
+## Submission
+
+The project is intended to be submitted as a Git repository.
+
+Before submission, verify:
+
+```bash
+pytest -v
+git status
+git log --oneline
+```
+
+The final repository should contain the complete source code, tests, simulator, and README, and should be reproducible from a clean checkout using the instructions above.
