@@ -1,0 +1,68 @@
+/* ── Reset & base ────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f5f6fa;
+    color: #2d3436;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────── */
+header {
+    background: #2d3436;
+    color: #fff;
+    padding: 1rem 2rem;
+    text-align: center;
+}
+header h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: .5px; }
+
+/* ── Main ────────────────────────────────────────────────────────────── */
+main { max-width: 800px; margin: 1.5rem auto; padding: 0 1rem; width: 100%; flex: 1; }
+
+/* ── Summary cards ───────────────────────────────────────────────────── */
+.summary { display: flex; gap: 1rem; justify-content: center; margin-bottom: 1.5rem; }
+.card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 1rem 2rem;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,.1);
+    min-width: 130px;
+}
+.card-label { display: block; font-size: .85rem; color: #636e72; text-transform: uppercase; margin-bottom: .25rem; }
+.card-value { display: block; font-size: 2rem; font-weight: 700; }
+.card-online .card-value { color: #00b894; }
+.card-offline .card-value { color: #d63031; }
+
+/* ── Status message ──────────────────────────────────────────────────── */
+.status-msg {
+    text-align: center;
+    padding: .75rem;
+    border-radius: 6px;
+    margin-bottom: 1rem;
+    font-size: .9rem;
+}
+.status-msg.error { background: #ffeaa7; color: #d63031; }
+.status-msg.hidden { display: none; }
+
+/* ── Table ───────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+th { background: #dfe6e9; text-align: left; padding: .75rem 1rem; font-size: .85rem; text-transform: uppercase; color: #636e72; }
+td { padding: .75rem 1rem; border-top: 1px solid #f0f0f0; }
+td.center { text-align: center; color: #636e72; }
+
+/* ── Status badges ───────────────────────────────────────────────────── */
+.badge { display: inline-block; padding: .2rem .7rem; border-radius: 4px; font-size: .8rem; font-weight: 600; }
+.badge-online { background: #00b89422; color: #00b894; }
+.badge-offline { background: #d6303122; color: #d63031; }
+
+/* ── Footer ──────────────────────────────────────────────────────────── */
+footer { text-align: center; padding: 1rem; font-size: .8rem; color: #b2bec3; }
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 500px) {
+    .summary { flex-direction: column; align-items: center; }
+    .card { min-width: 90%; }
+}
