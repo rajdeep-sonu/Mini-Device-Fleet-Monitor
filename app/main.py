@@ -4,6 +4,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, status
@@ -180,10 +181,12 @@ def api_summary():
 
 # ── Static dashboard ───────────────────────────────────────────────────
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 @app.get("/")
 def dashboard():
     """Serve the operator dashboard."""
-    return FileResponse("static/index.html")
+    return FileResponse(STATIC_DIR / "index.html")
