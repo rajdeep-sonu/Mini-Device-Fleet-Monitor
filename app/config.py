@@ -1,22 +1,17 @@
-"""Configuration constants for the fleet monitor."""
+"""Configuration constants for the fleet monitor.
+
+Supports configuration via environment variables with sensible defaults.
+"""
+
+import os
 
 # Heartbeat timeout in seconds. A device is ONLINE if its last heartbeat
 # was received within this window; otherwise it is OFFLINE.
-HEARTBEAT_TIMEOUT_SECONDS = 30
+HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HEARTBEAT_TIMEOUT_SECONDS", "30"))
 
-# Database file path (relative to working directory)
-DATABASE_PATH = "fleet_monitor.db"
+# Database file path (relative to working directory or absolute)
+DATABASE_PATH = os.getenv("DATABASE_PATH", "fleet_monitor.db")
 
-# Default sample devices created on first run
-DEFAULT_DEVICES = [
-    {"id": "device-001", "name": "Device 001"},
-    {"id": "device-002", "name": "Device 002"},
-    {"id": "device-003", "name": "Device 003"},
-    {"id": "device-004", "name": "Device 004"},
-    {"id": "device-005", "name": "Device 005"},
-]
-
-# Simulator settings
-SIMULATOR_HEARTBEAT_INTERVAL = 5  # seconds between heartbeats
-SIMULATOR_OFFLINE_DEVICE_ID = "device-003"  # this device will stop sending heartbeats
-SIMULATOR_OFFLINE_AFTER_SECONDS = 30  # stop heartbeats after this many seconds
+# Server host and port
+HOST = os.getenv("HOST", "127.0.0.1")
+PORT = int(os.getenv("PORT", "8000"))

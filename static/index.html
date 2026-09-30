@@ -9,26 +9,35 @@
 <body>
     <header>
         <h1>Mini Device Fleet Monitor</h1>
+        <p class="subtitle">Real-time IoT Fleet Health & Heartbeat Tracker (30s Timeout)</p>
     </header>
 
     <main>
         <!-- Fleet summary cards -->
         <section id="summary" class="summary">
-            <div class="card">
-                <span class="card-label">Total</span>
+            <div class="card" id="card-total" title="Show all devices">
+                <span class="card-label">Total Fleet</span>
                 <span id="total-count" class="card-value">—</span>
             </div>
-            <div class="card card-online">
+            <div class="card card-online" id="card-online" title="Filter ONLINE devices">
                 <span class="card-label">Online</span>
                 <span id="online-count" class="card-value">—</span>
             </div>
-            <div class="card card-offline">
+            <div class="card card-offline" id="card-offline" title="Filter OFFLINE devices">
                 <span class="card-label">Offline</span>
                 <span id="offline-count" class="card-value">—</span>
             </div>
         </section>
 
-        <!-- Status messages -->
+        <!-- Filter bar -->
+        <div class="filter-bar">
+            <span>Filter:</span>
+            <button class="filter-btn active" data-filter="ALL">All</button>
+            <button class="filter-btn" data-filter="ONLINE">Online</button>
+            <button class="filter-btn" data-filter="OFFLINE">Offline</button>
+        </div>
+
+        <!-- Status / error alerts -->
         <div id="status-msg" class="status-msg hidden"></div>
 
         <!-- Device table -->
@@ -39,17 +48,19 @@
                         <th>Device</th>
                         <th>Status</th>
                         <th>Last Heartbeat</th>
+                        <th>CPU</th>
+                        <th>Signal</th>
                     </tr>
                 </thead>
                 <tbody id="device-tbody">
-                    <tr><td colspan="3" class="center">Loading…</td></tr>
+                    <tr><td colspan="5" class="center">Loading fleet data…</td></tr>
                 </tbody>
             </table>
         </section>
     </main>
 
     <footer>
-        <span id="last-refresh">—</span>
+        <span id="last-refresh">—</span> | <a href="/docs" target="_blank" style="color: #636e72; text-decoration: underline;">API Documentation (/docs)</a>
     </footer>
 
     <script src="/static/app.js"></script>

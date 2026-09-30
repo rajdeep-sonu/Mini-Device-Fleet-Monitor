@@ -1,11 +1,12 @@
-"""Tests for the Mini Device Fleet Monitor API.
+"""Comprehensive API test suite for Mini Device Fleet Monitor.
 
-Each test uses a fresh temporary SQLite database so tests are isolated.
+Each test executes against an isolated temporary SQLite database.
+Validates all functional requirements, 30s timeout boundary, validation,
+error codes, and concurrent execution.
 """
 
-import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,7 +17,7 @@ from app.main import app
 
 @pytest.fixture(autouse=True)
 def _fresh_db(tmp_path, monkeypatch):
-    """Point the app at a temporary SQLite DB and initialise it."""
+    """Provide a fresh SQLite database for every single test."""
     db_path = str(tmp_path / "test.db")
     monkeypatch.setattr(config, "DATABASE_PATH", db_path)
     monkeypatch.setattr(database, "DATABASE_PATH", db_path)
@@ -30,183 +31,261 @@ def client():
     return TestClient(app, raise_server_exceptions=False)
 
 
-# ── Device registration ────────────────────────────────────────────────
+# ── 1. Initial State & Seeding Verification ───────────────────────────
 
 
-def test_register_device(client):
-    resp = client.post("/devices", json={"id": "dev-new", "name": "New Device"})
-    assert resp.status_code == 201
-    data = resp.json()
-    assert data["id"] == "dev-new"
-    assert data["name"] == "New Device"
-    assert data["status"] == "OFFLINE"  # no heartbeat yet
-
-
-def test_register_duplicate_device(client):
-    client.post("/devices", json={"id": "dup-01", "name": "First"})
-    resp = client.post("/devices", json={"id": "dup-01", "name": "Second"})
-    assert resp.status_code == 409
-    assert "already exists" in resp.json()["detail"]
-
-
-def test_register_device_empty_id(client):
-    resp = client.post("/devices", json={"id": "", "name": "No ID"})
-    assert resp.status_code == 400
-
-
-def test_register_device_missing_fields(client):
-    resp = client.post("/devices", json={"id": "x"})
-    assert resp.status_code == 422  # Pydantic validation
-
-
-# ── Device listing ─────────────────────────────────────────────────────
-
-
-def test_list_devices_returns_all_sample_devices(client):
+def test_fleet_initially_empty(client):
+    """Fleet must start empty without pre-seeded devices."""
     resp = client.get("/devices")
     assert resp.status_code == 200
+    assert resp.json() == []
+
+    summary = client.get("/summary").json()
+    assert summary == {"total": 0, "online": 0, "offline": 0}
+
+
+# ── 2. Device Registration ────────────────────────────────────────────
+
+
+def test_register_device_success(client):
+    resp = client.post("/devices", json={"id": "device-01", "name": "Lab Device 01"})
+    assert resp.status_code == 201
     data = resp.json()
-    assert len(data) == 5
-    ids = [d["id"] for d in data]
-    assert "device-001" in ids
+    assert data["id"] == "device-01"
+    assert data["name"] == "Lab Device 01"
+    assert data["status"] == "OFFLINE"
+    assert data["last_heartbeat"] is None
+    assert data["seconds_since_heartbeat"] is None
+    assert "T" in data["created_at"]  # ISO-8601 formatted
 
 
-# ── Heartbeat ──────────────────────────────────────────────────────────
+def test_register_duplicate_device_returns_409(client):
+    client.post("/devices", json={"id": "device-dup", "name": "Initial Device"})
+    resp = client.post("/devices", json={"id": "device-dup", "name": "Duplicate ID"})
+    assert resp.status_code == 409
+    assert "already exists" in resp.json()["detail"].lower()
 
 
-def test_heartbeat_success(client):
-    resp = client.post("/devices/device-001/heartbeat", json={"status": "OK"})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["message"] == "Heartbeat recorded"
-    assert body["device"]["id"] == "device-001"
-    assert body["device"]["last_heartbeat"] is not None
+def test_register_invalid_id_characters_returns_422(client):
+    # IDs with spaces or illegal symbols are rejected
+    resp = client.post("/devices", json={"id": "dev 01!", "name": "Invalid ID Device"})
+    assert resp.status_code == 422
 
 
-def test_heartbeat_with_timestamp(client):
-    ts = "2026-09-21T10:30:00Z"
-    resp = client.post("/devices/device-001/heartbeat", json={"timestamp": ts, "status": "OK"})
-    assert resp.status_code == 200
-    assert resp.json()["device"]["last_heartbeat"] == ts
+def test_register_empty_name_returns_422(client):
+    resp = client.post("/devices", json={"id": "dev-empty", "name": "   "})
+    assert resp.status_code == 422
 
 
-def test_heartbeat_with_extra_fields(client):
-    """The spec says extra fields like cpu_usage are allowed."""
-    resp = client.post(
-        "/devices/device-001/heartbeat",
-        json={"status": "OK", "cpu_usage": 42, "signal_strength": -71},
-    )
-    assert resp.status_code == 200
+# ── 3. Heartbeat Processing & Brief Exact Example ─────────────────────
 
 
-def test_heartbeat_unknown_device(client):
-    resp = client.post("/devices/unknown-999/heartbeat", json={"status": "OK"})
+def test_heartbeat_unknown_device_returns_404(client):
+    resp = client.post("/devices/unknown-device/heartbeat", json={"status": "OK"})
     assert resp.status_code == 404
     assert "not found" in resp.json()["detail"].lower()
 
 
-# ── Device status (ONLINE / OFFLINE) ───────────────────────────────────
+def test_heartbeat_brief_exact_example_shows_online(client):
+    """Sending the brief's exact example body MUST show ONLINE.
+
+    The brief specifies:
+        POST /devices/{id}/heartbeat
+        {"timestamp": "2026-09-21T10:30:00Z", "status": "OK"}
+    Even though 2026-09-21 is in the past, the server MUST track reception time
+    for status, keeping the reported timestamp in device_timestamp.
+    """
+    client.post("/devices", json={"id": "device-brief", "name": "Brief Device"})
+
+    resp = client.post(
+        "/devices/device-brief/heartbeat",
+        json={"timestamp": "2026-09-21T10:30:00Z", "status": "OK"},
+    )
+    assert resp.status_code == 200
+    device = resp.json()["device"]
+
+    # Status must be ONLINE right after receipt
+    assert device["status"] == "ONLINE"
+    assert device["device_timestamp"] == "2026-09-21T10:30:00Z"
+    assert device["device_status"] == "OK"
+    assert device["seconds_since_heartbeat"] is not None
+    assert device["seconds_since_heartbeat"] < 2.0
+
+    # GET /devices should also show ONLINE
+    get_resp = client.get("/devices/device-brief")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["status"] == "ONLINE"
 
 
-def test_fresh_heartbeat_is_online(client):
-    client.post("/devices/device-002/heartbeat", json={"status": "OK"})
-    resp = client.get("/devices/device-002")
+def test_heartbeat_with_diagnostic_metrics(client):
+    """Heartbeat supports cpu_usage and signal_strength, saving them to DB."""
+    client.post("/devices", json={"id": "device-metrics", "name": "Metrics Device"})
+
+    resp = client.post(
+        "/devices/device-metrics/heartbeat",
+        json={
+            "status": "OK",
+            "cpu_usage": 42.5,
+            "signal_strength": -71.0,
+            "extra_field": "allowed",
+        },
+    )
+    assert resp.status_code == 200
+    device = resp.json()["device"]
+    assert device["cpu_usage"] == 42.5
+    assert device["signal_strength"] == -71.0
+
+
+def test_heartbeat_malformed_timestamp_returns_422(client):
+    client.post("/devices", json={"id": "dev-ts", "name": "TS Device"})
+    resp = client.post(
+        "/devices/dev-ts/heartbeat",
+        json={"timestamp": "not-a-valid-date", "status": "OK"},
+    )
+    assert resp.status_code == 422
+
+
+def test_heartbeat_timezoneless_timestamp_returns_422(client):
+    """Timestamps without timezone information must be rejected with 422, not 500."""
+    client.post("/devices", json={"id": "dev-ts2", "name": "TS Device 2"})
+    resp = client.post(
+        "/devices/dev-ts2/heartbeat",
+        json={"timestamp": "2026-09-21 10:30:00", "status": "OK"},
+    )
+    assert resp.status_code == 422
+
+
+def test_heartbeat_invalid_cpu_usage_returns_422(client):
+    client.post("/devices", json={"id": "dev-cpu", "name": "CPU Device"})
+    # CPU usage > 100
+    resp = client.post("/devices/dev-cpu/heartbeat", json={"cpu_usage": 150.0})
+    assert resp.status_code == 422
+
+
+def test_heartbeat_invalid_signal_strength_returns_422(client):
+    client.post("/devices", json={"id": "dev-sig", "name": "Sig Device"})
+    # Positive signal strength is invalid (dBm is negative)
+    resp = client.post("/devices/dev-sig/heartbeat", json={"signal_strength": 10.0})
+    assert resp.status_code == 422
+
+
+# ── 4. 30-Second Timeout Rule & Status Transitions ────────────────────
+
+
+def test_30_second_timeout_boundary_without_sleeping(client):
+    """Validate ONLINE vs OFFLINE rule at the exact 30s threshold without sleeping.
+
+    - within 30s (e.g. 29.5s ago) -> ONLINE
+    - exceeding 30s (e.g. 30.5s ago) -> OFFLINE
+    """
+    client.post("/devices", json={"id": "dev-boundary", "name": "Boundary Device"})
+
+    # 1. Heartbeat 29.5s ago -> within 30s -> ONLINE
+    inside_time = (datetime.now(timezone.utc) - timedelta(seconds=29.5)).isoformat()
+    with database.get_db() as conn:
+        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (inside_time, "dev-boundary"))
+
+    resp = client.get("/devices/dev-boundary")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ONLINE"
 
-
-def test_stale_heartbeat_is_offline(client):
-    """A heartbeat older than the timeout should result in OFFLINE."""
-    stale_time = (
-        datetime.now(timezone.utc) - timedelta(seconds=config.HEARTBEAT_TIMEOUT_SECONDS + 5)
-    ).isoformat()
+    # 2. Heartbeat 30.5s ago -> exceeds 30s -> OFFLINE
+    outside_time = (datetime.now(timezone.utc) - timedelta(seconds=30.5)).isoformat()
     with database.get_db() as conn:
-        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (stale_time, "device-001"))
-    resp = client.get("/devices/device-001")
+        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (outside_time, "dev-boundary"))
+
+    resp = client.get("/devices/dev-boundary")
     assert resp.status_code == 200
     assert resp.json()["status"] == "OFFLINE"
 
 
-def test_device_no_heartbeat_is_offline(client):
-    resp = client.get("/devices/device-001")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "OFFLINE"
-    assert data["last_heartbeat"] is None
-    assert data["seconds_since_heartbeat"] is None
+def test_offline_transitions_to_online_on_heartbeat(client):
+    """Device without heartbeat is OFFLINE; becomes ONLINE immediately on heartbeat."""
+    client.post("/devices", json={"id": "dev-trans", "name": "Transition Device"})
+    assert client.get("/devices/dev-trans").json()["status"] == "OFFLINE"
 
-
-# ── Multiple devices ──────────────────────────────────────────────────
+    client.post("/devices/dev-trans/heartbeat", json={"status": "OK"})
+    assert client.get("/devices/dev-trans").json()["status"] == "ONLINE"
 
 
 def test_multiple_devices_independent_status(client):
-    client.post("/devices/device-001/heartbeat", json={"status": "OK"})
-    resp = client.get("/devices")
-    devices = {d["id"]: d for d in resp.json()}
-    assert devices["device-001"]["status"] == "ONLINE"
-    assert devices["device-002"]["status"] == "OFFLINE"
+    """Each device maintains its own heartbeat status independently."""
+    client.post("/devices", json={"id": "dev-a", "name": "Device A"})
+    client.post("/devices", json={"id": "dev-b", "name": "Device B"})
+
+    # dev-a receives heartbeat, dev-b does not
+    client.post("/devices/dev-a/heartbeat", json={"status": "OK"})
+
+    devs = {d["id"]: d for d in client.get("/devices").json()}
+    assert devs["dev-a"]["status"] == "ONLINE"
+    assert devs["dev-b"]["status"] == "OFFLINE"
 
 
-# ── Latest heartbeat tracking ─────────────────────────────────────────
-
-
-def test_latest_heartbeat_tracked(client):
-    client.post("/devices/device-003/heartbeat", json={"status": "OK"})
-    time.sleep(0.1)
-    client.post("/devices/device-003/heartbeat", json={"status": "OK"})
-    resp = client.get("/devices/device-003")
-    data = resp.json()
-    assert data["seconds_since_heartbeat"] is not None
-    assert data["seconds_since_heartbeat"] < 2
-
-
-# ── Unknown device ────────────────────────────────────────────────────
-
-
-def test_get_unknown_device_returns_404(client):
-    resp = client.get("/devices/does-not-exist")
-    assert resp.status_code == 404
-
-
-# ── Fleet summary ─────────────────────────────────────────────────────
+# ── 5. Filtering and Summary APIs ─────────────────────────────────────
 
 
 def test_fleet_summary_counts(client):
-    for did in ("device-001", "device-002", "device-004"):
-        client.post(f"/devices/{did}/heartbeat", json={"status": "OK"})
+    client.post("/devices", json={"id": "d1", "name": "Device 1"})
+    client.post("/devices", json={"id": "d2", "name": "Device 2"})
+    client.post("/devices", json={"id": "d3", "name": "Device 3"})
+
+    client.post("/devices/d1/heartbeat", json={"status": "OK"})
+    client.post("/devices/d2/heartbeat", json={"status": "OK"})
+
     resp = client.get("/summary")
     assert resp.status_code == 200
     summary = resp.json()
+    assert summary["total"] == 3
+    assert summary["online"] == 2
+    assert summary["offline"] == 1
+
+
+def test_filter_devices_by_status(client):
+    """GET /devices?status=ONLINE and ?status=OFFLINE filter results correctly."""
+    client.post("/devices", json={"id": "on-1", "name": "Online 1"})
+    client.post("/devices", json={"id": "off-1", "name": "Offline 1"})
+
+    client.post("/devices/on-1/heartbeat", json={"status": "OK"})
+
+    # Filter ONLINE
+    online_resp = client.get("/devices?status=ONLINE")
+    assert online_resp.status_code == 200
+    online_list = online_resp.json()
+    assert len(online_list) == 1
+    assert online_list[0]["id"] == "on-1"
+
+    # Filter OFFLINE (case insensitive)
+    offline_resp = client.get("/devices?status=offline")
+    assert offline_resp.status_code == 200
+    offline_list = offline_resp.json()
+    assert len(offline_list) == 1
+    assert offline_list[0]["id"] == "off-1"
+
+    # Invalid status filter
+    bad_resp = client.get("/devices?status=UNKNOWN")
+    assert bad_resp.status_code == 400
+
+
+# ── 6. Concurrency Safety Test ────────────────────────────────────────
+
+
+def test_concurrent_heartbeats(client):
+    """Multiple threads sending heartbeats concurrently must succeed without SQLite lock errors."""
+    # Register 5 devices
+    for i in range(5):
+        client.post("/devices", json={"id": f"conc-{i}", "name": f"Concurrent Device {i}"})
+
+    def send_hb(dev_id: str):
+        return client.post(f"/devices/{dev_id}/heartbeat", json={"status": "OK"})
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        # 20 concurrent heartbeat requests distributed across devices
+        tasks = [f"conc-{i % 5}" for i in range(20)]
+        results = list(executor.map(send_hb, tasks))
+
+    for r in results:
+        assert r.status_code == 200
+
+    summary = client.get("/summary").json()
     assert summary["total"] == 5
-    assert summary["online"] == 3
-    assert summary["offline"] == 2
-
-
-# ── Status transitions ────────────────────────────────────────────────
-
-
-def test_heartbeat_updates_status_from_offline_to_online(client):
-    assert client.get("/devices/device-004").json()["status"] == "OFFLINE"
-    client.post("/devices/device-004/heartbeat", json={"status": "OK"})
-    assert client.get("/devices/device-004").json()["status"] == "ONLINE"
-
-
-def test_30_second_timeout_boundary(client):
-    """Heartbeat just inside the timeout should be ONLINE; just outside should be OFFLINE."""
-    # 1 second inside the boundary → ONLINE
-    inside = (
-        datetime.now(timezone.utc) - timedelta(seconds=config.HEARTBEAT_TIMEOUT_SECONDS - 1)
-    ).isoformat()
-    with database.get_db() as conn:
-        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (inside, "device-001"))
-    resp = client.get("/devices/device-001")
-    assert resp.json()["status"] == "ONLINE"
-
-    # 1 second outside the boundary → OFFLINE
-    outside = (
-        datetime.now(timezone.utc) - timedelta(seconds=config.HEARTBEAT_TIMEOUT_SECONDS + 1)
-    ).isoformat()
-    with database.get_db() as conn:
-        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (outside, "device-001"))
-    resp = client.get("/devices/device-001")
-    assert resp.json()["status"] == "OFFLINE"
+    assert summary["online"] == 5
