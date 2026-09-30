@@ -1,5 +1,6 @@
 """Business logic for device registration, heartbeat recording, and status evaluation."""
 
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -73,20 +74,26 @@ def register_device(device_id: str, name: str) -> dict | None:
     """Register a new device.
 
     Returns the device dict, or None if the device ID is already registered.
+    Catches sqlite3.IntegrityError to safely handle concurrent registration races.
     """
     now = _utc_now()
     with get_db() as conn:
         existing = conn.execute("SELECT id FROM devices WHERE id = ?", (device_id,)).fetchone()
         if existing is not None:
             return None  # duplicate ID
-        conn.execute(
-            """
-            INSERT INTO devices (id, name, created_at)
-            VALUES (?, ?, ?)
-            """,
-            (device_id, name, now),
-        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO devices (id, name, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (device_id, name, now),
+            )
+        except sqlite3.IntegrityError:
+            return None  # duplicate ID from concurrent insertion race
         row = conn.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
+    if row is None:
+        return None
     return _device_row_to_dict(row)
 
 

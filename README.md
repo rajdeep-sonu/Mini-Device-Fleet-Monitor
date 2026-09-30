@@ -184,22 +184,22 @@ python -m pytest -q
 
 Output:
 ```text
-..................                                                       [100%]
-18 passed in 0.94s
+.....................                                                    [100%]
+21 passed in 1.10s
 ```
 
 ### Test Coverage Highlights
 
-The test suite in `tests/test_api.py` includes **18 focused tests** verifying:
+The test suite in `tests/test_api.py` includes **21 focused tests** verifying:
 1. **Clean initial state**: Confirms fleet starts empty with 0 devices.
 2. **Device registration**: Valid registration, duplicate ID rejection (HTTP 409), ID pattern validation (HTTP 422), empty name rejection (HTTP 422).
 3. **Heartbeat handling**: Unknown device rejection (HTTP 404), server reception timestamp tracking, storage of diagnostic telemetry (`cpu_usage`, `signal_strength`).
 4. **Brief's exact example body**: Sends `{"timestamp": "2026-09-21T10:30:00Z", "status": "OK"}` and asserts device shows `ONLINE` immediately.
 5. **Input validation**: Malformed timestamps and timezone-less timestamps return HTTP 422 (never 500). Out-of-bounds CPU (`>100%`) and signal strength return HTTP 422.
 6. **30-second timeout rule**: Validated without artificial `sleep()` delays using millisecond-precision UTC offsets (tested at 29.5s -> ONLINE, 30.5s -> OFFLINE).
-7. **Status transitions & independence**: Devices with no heartbeats are OFFLINE; become ONLINE on first heartbeat; multiple devices maintain status independently.
+7. **Status transitions & aging recovery**: Devices with no heartbeats are OFFLINE; become ONLINE on first heartbeat; devices aged past 30s recover to ONLINE upon new heartbeat; `/summary` dynamically reflects aged devices as offline; multiple devices maintain status independently.
 8. **Fleet summary & filtering**: Verifies aggregate counts, `?status=ONLINE`, `?status=OFFLINE`, and invalid status handling (HTTP 400).
-9. **Concurrency safety**: `concurrent.futures.ThreadPoolExecutor` sending 20 simultaneous heartbeats across 5 devices without SQLite lock conflicts.
+9. **Concurrency safety**: `concurrent.futures.ThreadPoolExecutor` sending 20 simultaneous heartbeats across 5 devices without SQLite lock conflicts, and race condition verification ensuring simultaneous duplicate registrations return only HTTP 201 and 409 (never 500).
 
 ---
 

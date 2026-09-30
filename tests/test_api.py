@@ -10,7 +10,6 @@ from datetime import datetime, timezone, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-import app.config as config
 import app.database as database
 from app.main import app
 
@@ -19,10 +18,7 @@ from app.main import app
 def _fresh_db(tmp_path, monkeypatch):
     """Provide a fresh SQLite database for every single test."""
     db_path = str(tmp_path / "test.db")
-    monkeypatch.setattr(config, "DATABASE_PATH", db_path)
     monkeypatch.setattr(database, "DATABASE_PATH", db_path)
-    import app.services as svc
-    monkeypatch.setattr(svc, "get_db", database.get_db)
     database.init_db()
 
 
@@ -208,6 +204,25 @@ def test_offline_transitions_to_online_on_heartbeat(client):
     assert client.get("/devices/dev-trans").json()["status"] == "ONLINE"
 
 
+def test_aged_device_transitions_to_online_on_new_heartbeat(client):
+    """A device whose heartbeat has aged past 30s transitions from OFFLINE back to ONLINE on a new heartbeat."""
+    client.post("/devices", json={"id": "dev-reconnect", "name": "Reconnect Device"})
+    client.post("/devices/dev-reconnect/heartbeat", json={"status": "OK"})
+    assert client.get("/devices/dev-reconnect").json()["status"] == "ONLINE"
+
+    # Age heartbeat past 30s (e.g. 45s ago)
+    past_time = (datetime.now(timezone.utc) - timedelta(seconds=45.0)).isoformat()
+    with database.get_db() as conn:
+        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (past_time, "dev-reconnect"))
+
+    assert client.get("/devices/dev-reconnect").json()["status"] == "OFFLINE"
+
+    # New heartbeat arrives -> device transitions back to ONLINE
+    resp = client.post("/devices/dev-reconnect/heartbeat", json={"status": "OK"})
+    assert resp.status_code == 200
+    assert client.get("/devices/dev-reconnect").json()["status"] == "ONLINE"
+
+
 def test_multiple_devices_independent_status(client):
     """Each device maintains its own heartbeat status independently."""
     client.post("/devices", json={"id": "dev-a", "name": "Device A"})
@@ -238,6 +253,26 @@ def test_fleet_summary_counts(client):
     assert summary["total"] == 3
     assert summary["online"] == 2
     assert summary["offline"] == 1
+
+
+def test_summary_counts_device_offline_after_aging(client):
+    """GET /summary dynamically reflects a device transitioning from ONLINE to OFFLINE after its heartbeat ages past 30s."""
+    client.post("/devices", json={"id": "sum-1", "name": "Device Sum 1"})
+    client.post("/devices", json={"id": "sum-2", "name": "Device Sum 2"})
+
+    client.post("/devices/sum-1/heartbeat", json={"status": "OK"})
+    client.post("/devices/sum-2/heartbeat", json={"status": "OK"})
+
+    summary_before = client.get("/summary").json()
+    assert summary_before == {"total": 2, "online": 2, "offline": 0}
+
+    # Age sum-1 past 30s (e.g. 35s ago)
+    aged_time = (datetime.now(timezone.utc) - timedelta(seconds=35.0)).isoformat()
+    with database.get_db() as conn:
+        conn.execute("UPDATE devices SET last_heartbeat = ? WHERE id = ?", (aged_time, "sum-1"))
+
+    summary_after = client.get("/summary").json()
+    assert summary_after == {"total": 2, "online": 1, "offline": 1}
 
 
 def test_filter_devices_by_status(client):
@@ -289,3 +324,19 @@ def test_concurrent_heartbeats(client):
     summary = client.get("/summary").json()
     assert summary["total"] == 5
     assert summary["online"] == 5
+
+
+def test_concurrent_duplicate_registration_returns_201_and_409(client):
+    """Concurrent registrations for the same device ID must return only 201 (exactly once) and 409 (conflicts), never 500."""
+    def register():
+        return client.post("/devices", json={"id": "race-device", "name": "Race Device"})
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(register) for _ in range(32)]
+        results = [f.result() for f in futures]
+
+    statuses = [r.status_code for r in results]
+    assert 500 not in statuses
+    assert statuses.count(201) == 1
+    assert statuses.count(409) == 31
+    assert set(statuses) == {201, 409}
