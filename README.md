@@ -310,13 +310,3 @@ AI-generated suggestions were reviewed and modified where necessary rather than 
 ## Submission
 
 The project is intended to be submitted as a Git repository.
-
-Before submission, verify:
-
-```bash
-pytest -v
-git status
-git log --oneline
-```
-
-The final repository should contain the complete source code, tests, simulator, and README, and should be reproducible from a clean checkout using the instructions above.
